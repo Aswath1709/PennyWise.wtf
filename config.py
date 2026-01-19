@@ -20,7 +20,7 @@ CACHE_PATH = DATA_DIR / "category_cache.json"
 # Model
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-2.5-flash"
-
+#jajaja
 
 # Categories
 CATEGORIES = [
