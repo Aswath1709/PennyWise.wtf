@@ -15,7 +15,7 @@ DB_PATH = DATA_DIR / "finance.db"
 # Category cache
 CACHE_PATH = DATA_DIR / "category_cache.json"
 # Model
-GEMINI_API_KEY = "<Your API key>"
+GEMINI_API_KEY = "<Your API key> yes here"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
