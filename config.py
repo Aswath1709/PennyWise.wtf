@@ -1,5 +1,8 @@
 from pathlib import Path
-
+from dotenv import load_dotenv
+import os
+# Load secrets from the .env file
+load_dotenv()
 # ========== PATHS ==========
 
 # Project root directory
@@ -15,7 +18,7 @@ DB_PATH = DATA_DIR / "finance.db"
 # Category cache
 CACHE_PATH = DATA_DIR / "category_cache.json"
 # Model
-GEMINI_API_KEY = "<Your API key> yes here"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
