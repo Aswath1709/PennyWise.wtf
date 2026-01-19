@@ -15,8 +15,10 @@ DB_PATH = DATA_DIR / "finance.db"
 # Category cache
 CACHE_PATH = DATA_DIR / "category_cache.json"
 # Model
-GEMINI_API_KEY = "AIzaSyCEPI5juiSOJLaRk-miWNck7jBhB-0-w6A"
+GEMINI_API_KEY = "<Your API key>"
 GEMINI_MODEL = "gemini-2.5-flash"
+
+
 # Categories
 CATEGORIES = [
     "groceries", "dining", "transport", "subscriptions",
