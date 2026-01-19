@@ -15,7 +15,7 @@ env/
 
 # --- Streamlit ---
 # config.toml is usually safe, but secrets.toml contains passwords
-.streamlit/secrets.toml
+
 
 # --- Database ---
 # If your "Database" folder contains actual data files, ignore them.
