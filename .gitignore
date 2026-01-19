@@ -1,11 +1,33 @@
-# Python-generated files
+# --- Python Basics ---
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*$py.class
 
-# Virtual environments
-.venv
+# --- Virtual Environments ---
+# You are using .venv, but we list others just in case
+.venv/
+venv/
+env/
+
+# --- Security (CRITICAL) ---
+# These files contain your API keys. NEVER commit them.
 .env
+
+# --- Streamlit ---
+# config.toml is usually safe, but secrets.toml contains passwords
+.streamlit/secrets.toml
+
+# --- Database ---
+# If your "Database" folder contains actual data files, ignore them.
+# Keep the folder, but ignore the binary files inside.
+*.sqlite3
+*.db
+*.csv
+
+# --- PyCharm Settings ---
+# These are your personal window layouts
+.idea/
+
+# --- OS Junk ---
+.DS_Store
+Thumbs.db
