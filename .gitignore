@@ -32,7 +32,3 @@ env/
 # --- OS Junk ---
 .DS_Store
 Thumbs.db
-
-uv.lock
-pyproject.toml
-.python-version
