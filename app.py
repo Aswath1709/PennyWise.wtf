@@ -40,7 +40,7 @@ except ImportError:
         return False
 
 
-    def parse_single_statement(path):
+    def parse_single_statement(path, statement_type="credit"):
         return pd.DataFrame()
 
 
@@ -55,7 +55,7 @@ except ImportError:
 
 st.set_page_config(
     page_title="PennyWise.wtf",
-    page_icon="",
+    page_icon="💰",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -111,10 +111,9 @@ def refresh_data():
     st.cache_data.clear()
 
 
-# ========== SIDEBAR ==========
-
 with st.sidebar:
-    st.title("PennyWise.wtf (Where The Funds?)")
+    st.title("PennyWise.wtf")
+    st.caption("Where The Funds?")
     st.markdown("---")
 
     # Navigation
@@ -141,12 +140,6 @@ with st.sidebar:
             st.rerun()
 
 
-# ========== EMPTY STATE ==========
-
-# ========== EMPTY STATE ==========
-
-# ========== EMPTY STATE ==========
-
 def show_empty_state():
     """Show when no data is available."""
     st.markdown("""
@@ -160,38 +153,53 @@ def show_empty_state():
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
+        # Bank and Account Type Selection
+        subcol1, subcol2 = st.columns(2)
+        with subcol1:
+            bank = st.selectbox(
+                "🏦 Bank",
+                ["Chase"],
+                key="empty_bank"
+            )
+        with subcol2:
+            account_type = st.selectbox(
+                "💳 Type",
+                ["Credit Card", "Debit/Checking"],
+                key="empty_type"
+            )
+
+        statement_type = "credit" if account_type == "Credit Card" else "debit"
+
         uploaded_files = st.file_uploader(
-            "Upload Chase PDF Statements",
+            "Upload PDF Statements",
             type=['pdf'],
             accept_multiple_files=True,
-            help="Upload one or more Chase bank statement PDFs"
+            help=f"Upload {bank} {account_type} statement PDFs",
+            key="empty_state_uploader"
         )
 
         if uploaded_files:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            if st.button("🚀 Import Statements", type="primary", key="empty_import_btn"):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
 
-            for index, file in enumerate(uploaded_files):
-                status_text.text(f"Processing {file.name}...")
-                process_upload(file)
-                progress_bar.progress((index + 1) / len(uploaded_files))
+                for index, file in enumerate(uploaded_files):
+                    status_text.text(f"Processing {file.name}...")
+                    process_upload(file, statement_type, bank)
+                    progress_bar.progress((index + 1) / len(uploaded_files))
 
-            status_text.text("✅ All files processed!")
-
-            # Refresh and rerun ONLY after loop is done
-            refresh_data()
-            st.rerun()
+                status_text.text("✅ All files processed!")
+                refresh_data()
+                st.rerun()
 
     st.markdown("""
     <div style="text-align: center; margin-top: 30px;">
-        <p style="color: #888;">Supported: Chase statements (more coming soon)</p>
+        <p style="color: #888;">Supported: Chase (Credit & Debit) • More banks coming soon</p>
     </div>
     """, unsafe_allow_html=True)
-# ========== UPLOAD PROCESSING ==========
 
-# ========== UPLOAD PROCESSING ==========
 
-def process_upload(uploaded_file):
+def process_upload(uploaded_file, statement_type: str = "credit", bank: str = "Chase"):
     """Process uploaded PDF. Returns True if successful, False otherwise."""
 
     if is_file_imported(uploaded_file.name):
@@ -211,8 +219,12 @@ def process_upload(uploaded_file):
         with st.status(f"Processing {uploaded_file.name}...", expanded=False) as status:
             # Parse
             st.write("📄 Parsing PDF...")
-            df = parse_single_statement(temp_path)
+            df = parse_single_statement(temp_path, statement_type)
             st.write(f"   Found {len(df)} transactions")
+
+            if df.empty:
+                status.update(label=f"❌ {uploaded_file.name}: No transactions found", state="error")
+                return False
 
             # Sanitize
             st.write("🔒 Sanitizing sensitive data...")
@@ -222,9 +234,9 @@ def process_upload(uploaded_file):
             st.write("🏷️ Categorizing transactions...")
             df = categorize(df)
 
-            # Save
+            # Save with card_type and bank
             st.write("💾 Saving to database...")
-            result = save_transactions(df, source_file=uploaded_file.name)
+            result = save_transactions(df, source_file=uploaded_file.name, card_type=statement_type, bank=bank)
 
             status.update(label=f"✅ {uploaded_file.name} Complete!", state="complete")
 
@@ -242,6 +254,7 @@ def process_upload(uploaded_file):
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
 
 # ========== DASHBOARD PAGE ==========
 
@@ -434,7 +447,7 @@ def show_chat():
             from Agent.agent import FinanceAgent
             st.session_state.agent = FinanceAgent()
         except Exception as e:
-            pass
+            st.session_state.agent = None
 
     # Empty state message
     if df.empty:
@@ -459,7 +472,7 @@ def show_chat():
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            if "agent" in st.session_state:
+            if st.session_state.agent:
                 with st.spinner("Analyzing..."):
                     try:
                         response = st.session_state.agent.ask(prompt)
@@ -479,12 +492,12 @@ def show_chat():
                     except Exception as e:
                         st.error(f"Error: {e}")
             else:
-                st.info("Agent not initialized.")
+                st.error("Agent not initialized. Check your Gemini API key.")
 
     # Clear chat button
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
-        if hasattr(st.session_state, 'agent') and st.session_state.agent:
+        if st.session_state.agent:
             st.session_state.agent.reset()
         st.rerun()
 
@@ -574,20 +587,33 @@ def show_transactions():
 
 # ========== UPLOAD PAGE ==========
 
-# ========== UPLOAD PAGE ==========
-
-# ========== UPLOAD PAGE ==========
-
 def show_upload():
     """Upload page for new statements."""
     st.title("📤 Upload Statement")
 
-    st.markdown("""
-    Upload your bank statements to import transactions.
+    st.markdown("Upload your bank statements to import transactions.")
 
-    **Currently Supported:**
-    - ✅ Chase Bank (PDF statements)
-    """)
+    st.markdown("---")
+
+    # Bank and Account Type Selection
+    col1, col2 = st.columns(2)
+
+    with col1:
+        bank = st.selectbox(
+            "🏦 Select Bank",
+            ["Chase"],
+            help="More banks coming soon!"
+        )
+
+    with col2:
+        account_type = st.selectbox(
+            "💳 Account Type",
+            ["Credit Card", "Debit/Checking"],
+            help="Select the type of statement you're uploading"
+        )
+
+    # Map to parser type
+    statement_type = "credit" if account_type == "Credit Card" else "debit"
 
     st.markdown("---")
 
@@ -595,38 +621,34 @@ def show_upload():
         "Choose PDF files",
         type=['pdf'],
         accept_multiple_files=True,
-        help="Upload one or more Chase bank statement PDFs"
+        help=f"Upload {bank} {account_type} statement PDFs"
     )
 
     if uploaded_files:
         st.markdown(f"**Selected {len(uploaded_files)} files**")
 
         if st.button("🚀 Import Statements", type="primary"):
-
             progress_bar = st.progress(0)
             status_text = st.empty()
+
+            success_count = 0
 
             # Loop through files
             for index, file in enumerate(uploaded_files):
                 status_text.text(f"Processing file {index + 1} of {len(uploaded_files)}: {file.name}")
 
-                # Run processing (which no longer auto-restarts)
-                process_upload(file)
+                # Run processing with statement type and bank
+                if process_upload(file, statement_type, bank):
+                    success_count += 1
 
                 # Update progress
                 progress_bar.progress((index + 1) / len(uploaded_files))
 
             status_text.text("✅ Batch processing complete!")
-            st.success(f"Successfully processed {len(uploaded_files)} files.")
+            st.success(f"Successfully processed {success_count} of {len(uploaded_files)} files.")
 
-            # NOW we refresh and rerun once at the very end
-            if st.button("🔄 Refresh Dashboard Now"):
-                refresh_data()
-                st.rerun()
-
-            # Optional: Auto-rerun after a short delay or immediately
+            # Refresh data
             refresh_data()
-            st.rerun()
 
     # Show import history
     st.markdown("---")
@@ -640,6 +662,7 @@ def show_upload():
             st.dataframe(history, use_container_width=True, hide_index=True)
     except:
         st.info("No import history available")
+
 
 # ========== MAIN ROUTER ==========
 

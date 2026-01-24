@@ -38,7 +38,7 @@ CHARTS_DIR.mkdir(exist_ok=True)
 TOOL_DEFINITIONS = [
     {
         "name": "get_data_summary",
-        "description": "Get overview of available data: date range, total transactions, categories, total income/expenses. Call this first to understand what data exists.",
+        "description": "Get overview of available data: date range, total transactions, categories, banks, card types (credit/debit), total income/expenses. Call this first to understand what data exists.",
         "parameters": {
             "type": "object",
             "properties": {}
@@ -55,24 +55,29 @@ TOOL_DEFINITIONS = [
                 "category": {"type": "string", "description": "Filter by category"},
                 "description_contains": {"type": "string", "description": "Search merchant name"},
                 "min_amount": {"type": "number", "description": "Minimum amount"},
-                "max_amount": {"type": "number", "description": "Maximum amount"}
+                "max_amount": {"type": "number", "description": "Maximum amount"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"}
             }
         }
     },
     {
         "name": "aggregate",
-        "description": "Calculate sum, average, count, min, or max of transactions. Can group by category, month, or merchant. Use for 'how much did I spend' questions.",
+        "description": "Calculate sum, average, count, min, or max of transactions. Can group by category, month, merchant, card_type, or bank. Use for 'how much did I spend' questions.",
         "parameters": {
             "type": "object",
             "properties": {
                 "operation": {"type": "string", "description": "Math operation: sum, avg, count, min, max"},
-                "group_by": {"type": "string", "description": "Group by: category, month, or merchant"},
+                "group_by": {"type": "string",
+                             "description": "Group by: category, month, merchant, card_type, or bank"},
                 "start_date": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "Filter until date (YYYY-MM-DD)"},
                 "category": {"type": "string", "description": "Filter by category"},
                 "description_contains": {"type": "string", "description": "Filter by merchant name"},
                 "expenses_only": {"type": "boolean", "description": "Only expenses (negative amounts)"},
-                "income_only": {"type": "boolean", "description": "Only income (positive amounts)"}
+                "income_only": {"type": "boolean", "description": "Only income (positive amounts)"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"}
             },
             "required": ["operation"]
         }
@@ -87,7 +92,9 @@ TOOL_DEFINITIONS = [
                 "period1_end": {"type": "string", "description": "First period end (YYYY-MM-DD)"},
                 "period2_start": {"type": "string", "description": "Second period start (YYYY-MM-DD)"},
                 "period2_end": {"type": "string", "description": "Second period end (YYYY-MM-DD)"},
-                "group_by": {"type": "string", "description": "Compare by: total or category"}
+                "group_by": {"type": "string", "description": "Compare by: total or category"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name"}
             },
             "required": ["period1_start", "period1_end", "period2_start", "period2_end"]
         }
@@ -98,7 +105,9 @@ TOOL_DEFINITIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "min_occurrences": {"type": "integer", "description": "Minimum occurrences (default: 3)"}
+                "min_occurrences": {"type": "integer", "description": "Minimum occurrences (default: 3)"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name"}
             }
         }
     },
@@ -109,13 +118,15 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "category": {"type": "string", "description": "Check specific category only"},
-                "threshold": {"type": "number", "description": "Standard deviations (default: 2)"}
+                "threshold": {"type": "number", "description": "Standard deviations (default: 2)"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name"}
             }
         }
     },
     {
         "name": "run_sql",
-        "description": "Run custom SQL query. Table: transactions. Columns: id, date, description, amount, category.",
+        "description": "Run custom SQL query. Table: transactions. Columns: id, date, description, amount, category, card_type, bank, source_file.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -249,7 +260,7 @@ class FinanceTools:
         if self.df.empty:
             return {"status": "No data available"}
 
-        return {
+        result = {
             "total_transactions": len(self.df),
             "date_range": {
                 "start": self.df['date'].min().strftime('%Y-%m-%d'),
@@ -260,6 +271,18 @@ class FinanceTools:
             "total_expenses": round(abs(self.df[self.df['amount'] < 0]['amount'].sum()), 2)
         }
 
+        # Add card_type info if column exists
+        if 'card_type' in self.df.columns:
+            card_types = self.df['card_type'].dropna().unique().tolist()
+            result["card_types"] = card_types if card_types else ["unknown"]
+
+        # Add bank info if column exists
+        if 'bank' in self.df.columns:
+            banks = self.df['bank'].dropna().unique().tolist()
+            result["banks"] = banks if banks else ["unknown"]
+
+        return result
+
     # ---------- Tool: query_transactions ----------
 
     def query_transactions(
@@ -269,7 +292,9 @@ class FinanceTools:
             category: str = None,
             description_contains: str = None,
             min_amount: float = None,
-            max_amount: float = None
+            max_amount: float = None,
+            card_type: str = None,
+            bank: str = None
     ) -> dict:
         """Filter and return transactions."""
         result = self.df.copy()
@@ -287,14 +312,25 @@ class FinanceTools:
             result = result[result['amount'] >= min_amount]
         if max_amount is not None:
             result = result[result['amount'] <= max_amount]
+        if card_type and 'card_type' in result.columns:
+            result = result[result['card_type'].str.lower() == card_type.lower()]
+        if bank and 'bank' in result.columns:
+            result = result[result['bank'].str.lower() == bank.lower()]
 
         # Format output
         result = result.head(50)  # Limit results
         result['date'] = result['date'].dt.strftime('%Y-%m-%d')
 
+        # Include card_type and bank in output if they exist
+        output_cols = ['date', 'description', 'amount', 'category']
+        if 'card_type' in result.columns:
+            output_cols.append('card_type')
+        if 'bank' in result.columns:
+            output_cols.append('bank')
+
         return {
             "count": len(result),
-            "transactions": result[['date', 'description', 'amount', 'category']].to_dict('records')
+            "transactions": result[output_cols].to_dict('records')
         }
 
     # ---------- Tool: aggregate ----------
@@ -308,7 +344,9 @@ class FinanceTools:
             category: str = None,
             description_contains: str = None,
             expenses_only: bool = False,
-            income_only: bool = False
+            income_only: bool = False,
+            card_type: str = None,
+            bank: str = None
     ) -> dict:
         """Aggregate transactions with optional grouping."""
         data = self.df.copy()
@@ -322,6 +360,10 @@ class FinanceTools:
             data = data[data['category'].str.lower() == category.lower()]
         if description_contains:
             data = data[data['description'].str.contains(description_contains, case=False, na=False)]
+        if card_type and 'card_type' in data.columns:
+            data = data[data['card_type'].str.lower() == card_type.lower()]
+        if bank and 'bank' in data.columns:
+            data = data[data['bank'].str.lower() == bank.lower()]
 
         if data.empty:
             return {"result": 0, "count": 0, "note": "No matching transactions"}
@@ -357,6 +399,10 @@ class FinanceTools:
             data['group'] = data['description']
         elif group_by == "category":
             data['group'] = data['category']
+        elif group_by == "card_type" and 'card_type' in data.columns:
+            data['group'] = data['card_type'].fillna('unknown')
+        elif group_by == "bank" and 'bank' in data.columns:
+            data['group'] = data['bank'].fillna('unknown')
 
         # Perform aggregation
         if group_by:
@@ -652,10 +698,11 @@ class FinanceTools:
 
         return {
             "chart_created": True,
-            "chart_path": str(filepath),
+            "chart_path": str(filepath),  # Internal use only
             "chart_type": chart_type,
             "data_points": len(chart_data),
-            "total_amount": round(chart_data.sum(), 2)
+            "total_amount": round(chart_data.sum(), 2),
+            "_note": "Chart saved. DO NOT include the chart_path in your response - the UI displays it automatically."
         }
 
     # ---------- Tool: compare_periods_chart ----------
@@ -753,11 +800,12 @@ class FinanceTools:
 
         return {
             "chart_created": True,
-            "chart_path": str(filepath),
+            "chart_path": str(filepath),  # Internal use only
             "chart_type": "grouped_bar",
             "categories_compared": len(all_categories),
             "period1_total": round(sum(p1_values), 2),
-            "period2_total": round(sum(p2_values), 2)
+            "period2_total": round(sum(p2_values), 2),
+            "_note": "Chart saved. DO NOT include the chart_path in your response - the UI displays it automatically."
         }
 
     # ---------- Tool: analyze_and_chart ----------
@@ -873,7 +921,8 @@ class FinanceTools:
             "total": round(sum(full_breakdown.values()), 2),
             "count": len(full_breakdown),
             "chart_created": True,
-            "chart_path": str(filepath)
+            "chart_path": str(filepath),  # Internal use only
+            "_note": "Chart saved. DO NOT include the chart_path in your response - the UI displays it automatically."
         }
 
 
