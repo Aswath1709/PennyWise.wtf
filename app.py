@@ -217,10 +217,12 @@ def process_upload(uploaded_file, statement_type: str = "credit", bank: str = "C
     try:
         # We use a status container for this specific file
         with st.status(f"Processing {uploaded_file.name}...", expanded=False) as status:
-            # Parse
+            # Parse - now returns (df, account_last4)
             st.write("📄 Parsing PDF...")
-            df = parse_single_statement(temp_path, statement_type)
+            df, account_last4 = parse_single_statement(temp_path, statement_type)
             st.write(f"   Found {len(df)} transactions")
+            if account_last4:
+                st.write(f"   Account ending in: {account_last4}")
 
             if df.empty:
                 status.update(label=f"❌ {uploaded_file.name}: No transactions found", state="error")
@@ -234,9 +236,10 @@ def process_upload(uploaded_file, statement_type: str = "credit", bank: str = "C
             st.write("🏷️ Categorizing transactions...")
             df = categorize(df)
 
-            # Save with card_type and bank
+            # Save with card_type, bank, and account_last4
             st.write("💾 Saving to database...")
-            result = save_transactions(df, source_file=uploaded_file.name, card_type=statement_type, bank=bank)
+            result = save_transactions(df, source_file=uploaded_file.name, card_type=statement_type, bank=bank,
+                                       account_last4=account_last4)
 
             status.update(label=f"✅ {uploaded_file.name} Complete!", state="complete")
 
@@ -429,6 +432,38 @@ def show_top_merchants(df):
     st.plotly_chart(fig, use_container_width=True)
 
 
+# ========== CHART DISPLAY HELPER ==========
+
+def display_chart(chart_path: str):
+    """Display a chart - handles both Plotly JSON and Matplotlib PNG."""
+    import json
+
+    if not chart_path:
+        return
+
+    path = Path(chart_path)
+    if not path.exists():
+        return
+
+    # Interactive Plotly chart (JSON)
+    if path.suffix == '.json':
+        try:
+            with open(path, 'r') as f:
+                fig_dict = json.load(f)
+            fig = go.Figure(fig_dict)
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error loading interactive chart: {e}")
+
+    # Static Matplotlib chart (PNG)
+    elif path.suffix == '.png':
+        st.image(str(path))
+
+    # HTML (for standalone viewing)
+    elif path.suffix == '.html':
+        st.info("Interactive chart saved as HTML. Open in browser for full interactivity.")
+
+
 # ========== CHAT PAGE ==========
 
 def show_chat():
@@ -461,9 +496,13 @@ def show_chat():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if "chart_path" in message and message["chart_path"]:
-                if Path(message["chart_path"]).exists():
-                    st.image(message["chart_path"])
+            # Handle multiple charts
+            if "chart_paths" in message and message["chart_paths"]:
+                for chart_path in message["chart_paths"]:
+                    display_chart(chart_path)
+            # Backward compatibility for single chart
+            elif "chart_path" in message and message["chart_path"]:
+                display_chart(message["chart_path"])
 
     # Chat input
     if prompt := st.chat_input("Ask about your finances..."):
@@ -478,16 +517,22 @@ def show_chat():
                         response = st.session_state.agent.ask(prompt)
                         st.markdown(response)
 
-                        chart_path = None
-                        if st.session_state.agent.last_chart_path:
+                        # Display all charts
+                        chart_paths = []
+                        if hasattr(st.session_state.agent, 'chart_paths') and st.session_state.agent.chart_paths:
+                            chart_paths = st.session_state.agent.chart_paths
+                            for chart_path in chart_paths:
+                                display_chart(chart_path)
+                        elif st.session_state.agent.last_chart_path:
                             chart_path = st.session_state.agent.last_chart_path
-                            if Path(chart_path).exists():
-                                st.image(chart_path)
+                            display_chart(chart_path)
+                            chart_paths = [chart_path]
 
                         st.session_state.messages.append({
                             "role": "assistant",
                             "content": response,
-                            "chart_path": chart_path
+                            "chart_paths": chart_paths,
+                            "chart_path": chart_paths[0] if chart_paths else None  # Backward compat
                         })
                     except Exception as e:
                         st.error(f"Error: {e}")

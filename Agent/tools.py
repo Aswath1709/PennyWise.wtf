@@ -20,6 +20,14 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
 import matplotlib.pyplot as plt
 
+# Try to import plotly for interactive charts
+try:
+    import plotly.graph_objects as go
+
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
 # Import database - try both ways for compatibility
 try:
     from DataProcessing.database import load_transactions, run_query, get_summary
@@ -38,7 +46,7 @@ CHARTS_DIR.mkdir(exist_ok=True)
 TOOL_DEFINITIONS = [
     {
         "name": "get_data_summary",
-        "description": "Get overview of available data: date range, total transactions, categories, banks, card types (credit/debit), total income/expenses. Call this first to understand what data exists.",
+        "description": "Get overview of available data: date range, total transactions, categories, banks, card types (credit/debit), account numbers (last 4 digits), total income/expenses. Call this first to understand what data exists.",
         "parameters": {
             "type": "object",
             "properties": {}
@@ -57,19 +65,21 @@ TOOL_DEFINITIONS = [
                 "min_amount": {"type": "number", "description": "Minimum amount"},
                 "max_amount": {"type": "number", "description": "Maximum amount"},
                 "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
-                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"}
+                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"},
+                "account_last4": {"type": "string",
+                                  "description": "Filter by last 4 digits of account number (e.g., '1234')"}
             }
         }
     },
     {
         "name": "aggregate",
-        "description": "Calculate sum, average, count, min, or max of transactions. Can group by category, month, merchant, card_type, or bank. Use for 'how much did I spend' questions.",
+        "description": "Calculate sum, average, count, min, or max of transactions. Can group by category, month, merchant, card_type, bank, or account_last4. Use for 'how much did I spend' questions.",
         "parameters": {
             "type": "object",
             "properties": {
                 "operation": {"type": "string", "description": "Math operation: sum, avg, count, min, max"},
                 "group_by": {"type": "string",
-                             "description": "Group by: category, month, merchant, card_type, or bank"},
+                             "description": "Group by: category, month, merchant, card_type, bank, or account_last4"},
                 "start_date": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "Filter until date (YYYY-MM-DD)"},
                 "category": {"type": "string", "description": "Filter by category"},
@@ -77,7 +87,8 @@ TOOL_DEFINITIONS = [
                 "expenses_only": {"type": "boolean", "description": "Only expenses (negative amounts)"},
                 "income_only": {"type": "boolean", "description": "Only income (positive amounts)"},
                 "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
-                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"}
+                "bank": {"type": "string", "description": "Filter by bank name (e.g., 'Chase')"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"}
             },
             "required": ["operation"]
         }
@@ -94,7 +105,8 @@ TOOL_DEFINITIONS = [
                 "period2_end": {"type": "string", "description": "Second period end (YYYY-MM-DD)"},
                 "group_by": {"type": "string", "description": "Compare by: total or category"},
                 "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
-                "bank": {"type": "string", "description": "Filter by bank name"}
+                "bank": {"type": "string", "description": "Filter by bank name"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"}
             },
             "required": ["period1_start", "period1_end", "period2_start", "period2_end"]
         }
@@ -107,7 +119,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "min_occurrences": {"type": "integer", "description": "Minimum occurrences (default: 3)"},
                 "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
-                "bank": {"type": "string", "description": "Filter by bank name"}
+                "bank": {"type": "string", "description": "Filter by bank name"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"}
             }
         }
     },
@@ -120,13 +133,14 @@ TOOL_DEFINITIONS = [
                 "category": {"type": "string", "description": "Check specific category only"},
                 "threshold": {"type": "number", "description": "Standard deviations (default: 2)"},
                 "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
-                "bank": {"type": "string", "description": "Filter by bank name"}
+                "bank": {"type": "string", "description": "Filter by bank name"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"}
             }
         }
     },
     {
         "name": "run_sql",
-        "description": "Run custom SQL query. Table: transactions. Columns: id, date, description, amount, category, card_type, bank, source_file.",
+        "description": "Run custom SQL query. Table: transactions. Columns: id, date, description, amount, category, card_type, bank, account_last4, source_file.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -147,7 +161,10 @@ Chart types:
 Examples:
 - "pie chart of November spending" → chart_type="pie", group_by="category", start_date="2024-11-01", end_date="2024-11-30"
 - "bar chart comparing each month" → chart_type="bar", group_by="month"
-- "monthly spending trend" → chart_type="line", group_by="month" """,
+- "monthly spending trend" → chart_type="line", group_by="month"
+- "pie chart for account 1234" → chart_type="pie", group_by="category", account_last4="1234"
+
+Can be called multiple times with different account_last4 values to create separate charts for each account.""",
         "parameters": {
             "type": "object",
             "properties": {
@@ -157,7 +174,10 @@ Examples:
                 "start_date": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "Filter until date (YYYY-MM-DD)"},
                 "expenses_only": {"type": "boolean", "description": "Only show expenses (default: true)"},
-                "top_n": {"type": "integer", "description": "Show only top N items (default: 10)"}
+                "top_n": {"type": "integer", "description": "Show only top N items (default: 10)"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name"}
             },
             "required": ["chart_type", "group_by"]
         }
@@ -188,6 +208,31 @@ ALWAYS use this when user says:
         }
     },
     {
+        "name": "compare_accounts_chart",
+        "description": """REQUIRED when user asks to COMPARE two accounts AND wants a CHART/GRAPH/VISUAL.
+
+Creates a grouped bar chart with categories on X-axis and TWO bars per category (one for each account).
+
+ALWAYS use this when user says:
+- "compare spending between account 1234 and 5678"
+- "bar graph comparing my two accounts"
+- "visualize spending by category for accounts ending in 1122 vs 0594"
+- "compare transactions across categories between accounts" """,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "account1_last4": {"type": "string", "description": "First account last 4 digits (e.g., '1234')"},
+                "account2_last4": {"type": "string", "description": "Second account last 4 digits (e.g., '5678')"},
+                "group_by": {"type": "string", "description": "Compare by: category or merchant (default: category)"},
+                "title": {"type": "string", "description": "Chart title"},
+                "start_date": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "Filter until date (YYYY-MM-DD)"},
+                "expenses_only": {"type": "boolean", "description": "Only expenses (default: true)"}
+            },
+            "required": ["account1_last4", "account2_last4"]
+        }
+    },
+    {
         "name": "analyze_and_chart",
         "description": """USE THIS when user wants BOTH a text breakdown AND a visual chart in ONE response.
 
@@ -206,7 +251,10 @@ ALWAYS use this when user says:
                 "start_date": {"type": "string", "description": "Filter from date (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "Filter until date (YYYY-MM-DD)"},
                 "expenses_only": {"type": "boolean", "description": "Only expenses (default: true)"},
-                "top_n": {"type": "integer", "description": "Limit results (default: 10)"}
+                "top_n": {"type": "integer", "description": "Limit results (default: 10)"},
+                "account_last4": {"type": "string", "description": "Filter by last 4 digits of account number"},
+                "card_type": {"type": "string", "description": "Filter by card type: 'credit' or 'debit'"},
+                "bank": {"type": "string", "description": "Filter by bank name"}
             },
             "required": ["chart_type", "group_by"]
         }
@@ -281,6 +329,11 @@ class FinanceTools:
             banks = self.df['bank'].dropna().unique().tolist()
             result["banks"] = banks if banks else ["unknown"]
 
+        # Add account numbers (last 4 digits) if column exists
+        if 'account_last4' in self.df.columns:
+            accounts = self.df['account_last4'].dropna().unique().tolist()
+            result["accounts"] = [f"****{acc}" for acc in accounts] if accounts else ["unknown"]
+
         return result
 
     # ---------- Tool: query_transactions ----------
@@ -294,7 +347,8 @@ class FinanceTools:
             min_amount: float = None,
             max_amount: float = None,
             card_type: str = None,
-            bank: str = None
+            bank: str = None,
+            account_last4: str = None
     ) -> dict:
         """Filter and return transactions."""
         result = self.df.copy()
@@ -316,17 +370,21 @@ class FinanceTools:
             result = result[result['card_type'].str.lower() == card_type.lower()]
         if bank and 'bank' in result.columns:
             result = result[result['bank'].str.lower() == bank.lower()]
+        if account_last4 and 'account_last4' in result.columns:
+            result = result[result['account_last4'] == account_last4]
 
         # Format output
         result = result.head(50)  # Limit results
         result['date'] = result['date'].dt.strftime('%Y-%m-%d')
 
-        # Include card_type and bank in output if they exist
+        # Include card_type, bank, account_last4 in output if they exist
         output_cols = ['date', 'description', 'amount', 'category']
         if 'card_type' in result.columns:
             output_cols.append('card_type')
         if 'bank' in result.columns:
             output_cols.append('bank')
+        if 'account_last4' in result.columns:
+            output_cols.append('account_last4')
 
         return {
             "count": len(result),
@@ -346,7 +404,8 @@ class FinanceTools:
             expenses_only: bool = False,
             income_only: bool = False,
             card_type: str = None,
-            bank: str = None
+            bank: str = None,
+            account_last4: str = None
     ) -> dict:
         """Aggregate transactions with optional grouping."""
         data = self.df.copy()
@@ -364,6 +423,8 @@ class FinanceTools:
             data = data[data['card_type'].str.lower() == card_type.lower()]
         if bank and 'bank' in data.columns:
             data = data[data['bank'].str.lower() == bank.lower()]
+        if account_last4 and 'account_last4' in data.columns:
+            data = data[data['account_last4'] == account_last4]
 
         if data.empty:
             return {"result": 0, "count": 0, "note": "No matching transactions"}
@@ -403,6 +464,8 @@ class FinanceTools:
             data['group'] = data['card_type'].fillna('unknown')
         elif group_by == "bank" and 'bank' in data.columns:
             data['group'] = data['bank'].fillna('unknown')
+        elif group_by == "account_last4" and 'account_last4' in data.columns:
+            data['group'] = data['account_last4'].fillna('unknown')
 
         # Perform aggregation
         if group_by:
@@ -595,7 +658,10 @@ class FinanceTools:
             start_date: str = None,
             end_date: str = None,
             expenses_only: bool = True,
-            top_n: int = 10
+            top_n: int = 10,
+            account_last4: str = None,
+            card_type: str = None,
+            bank: str = None
     ) -> dict:
         """Create a visual chart and save to file."""
         data = self.df.copy()
@@ -605,6 +671,12 @@ class FinanceTools:
             data = data[data['date'] >= start_date]
         if end_date:
             data = data[data['date'] <= end_date]
+        if account_last4 and 'account_last4' in data.columns:
+            data = data[data['account_last4'] == account_last4]
+        if card_type and 'card_type' in data.columns:
+            data = data[data['card_type'].str.lower() == card_type.lower()]
+        if bank and 'bank' in data.columns:
+            data = data[data['bank'].str.lower() == bank.lower()]
         if expenses_only:
             data = data[data['amount'] < 0]
             data['amount'] = data['amount'].abs()  # Make positive for charting
@@ -640,24 +712,102 @@ class FinanceTools:
                 date_range = f" (from {start_date})"
             elif end_date:
                 date_range = f" (until {end_date})"
-            title = f"Spending by {group_by.title()}{date_range}"
+
+            account_label = f" - Account ****{account_last4}" if account_last4 else ""
+            title = f"Spending by {group_by.title()}{date_range}{account_label}"
 
         # Create chart
-        plt.figure(figsize=(10, 6))
         plt.style.use('seaborn-v0_8-darkgrid')
 
         if chart_type == "pie":
+            total = chart_data.sum()
+
+            # Use Plotly for interactive pie chart if available
+            if PLOTLY_AVAILABLE:
+                colors = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462',
+                          '#b3de69', '#fccde5', '#d9d9d9', '#bc80bd', '#ccebc5']
+
+                fig = go.Figure(data=[go.Pie(
+                    labels=chart_data.index.tolist(),
+                    values=chart_data.values.tolist(),
+                    hole=0.3,  # Donut style
+                    textinfo='none',  # No text on slices
+                    hovertemplate='<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>',
+                    marker=dict(colors=colors[:len(chart_data)])
+                )])
+
+                fig.update_layout(
+                    title=dict(text=title, font=dict(size=18, color='#333')),
+                    showlegend=True,
+                    legend=dict(
+                        orientation="v",
+                        yanchor="middle",
+                        y=0.5,
+                        xanchor="left",
+                        x=1.02,
+                        font=dict(size=12)
+                    ),
+                    margin=dict(t=60, b=20, l=20, r=150),
+                    paper_bgcolor='white',
+                    plot_bgcolor='white'
+                )
+
+                # Save as HTML for interactive viewing
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"{chart_type}_{group_by}_{timestamp}.html"
+                filepath = CHARTS_DIR / filename
+                fig.write_html(str(filepath), include_plotlyjs='cdn')
+
+                # Also save JSON for Streamlit to render
+                json_filename = f"{chart_type}_{group_by}_{timestamp}.json"
+                json_filepath = CHARTS_DIR / json_filename
+                fig.write_json(str(json_filepath))
+
+                return {
+                    "chart_created": True,
+                    "chart_path": str(json_filepath),
+                    "chart_type": "plotly_pie",
+                    "interactive": True,
+                    "data_points": len(chart_data),
+                    "total": round(total, 2),
+                    "_note": "Interactive chart saved. DO NOT include the chart_path in your response."
+                }
+
+            # Fallback to matplotlib if plotly not available
+            fig, ax = plt.subplots(figsize=(12, 8))
             colors = plt.cm.Set3(range(len(chart_data)))
-            plt.pie(
+
+            wedges, texts = ax.pie(
                 chart_data.values,
-                labels=[f"{k}\n${v:,.0f}" for k, v in chart_data.items()],
-                autopct='%1.1f%%',
                 colors=colors,
                 startangle=90
             )
-            plt.title(title, fontsize=14, fontweight='bold')
 
-        elif chart_type == "bar":
+            legend_labels = [f"{k}: ${v:,.0f} ({v / total * 100:.1f}%)" for k, v in chart_data.items()]
+            ax.legend(wedges, legend_labels, title="Categories", loc="center left",
+                      bbox_to_anchor=(1, 0, 0.5, 1), fontsize=10)
+
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{chart_type}_{group_by}_{timestamp}.png"
+            filepath = CHARTS_DIR / filename
+            fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+
+            return {
+                "chart_created": True,
+                "chart_path": str(filepath),
+                "chart_type": chart_type,
+                "interactive": False,
+                "data_points": len(chart_data),
+                "total": round(total, 2),
+                "_note": "Chart saved. DO NOT include the chart_path in your response."
+            }
+
+        plt.figure(figsize=(10, 6))
+
+        if chart_type == "bar":
             # Sort chronologically if grouped by month
             if group_by == "month":
                 chart_data = chart_data.sort_index()
@@ -808,6 +958,122 @@ class FinanceTools:
             "_note": "Chart saved. DO NOT include the chart_path in your response - the UI displays it automatically."
         }
 
+    # ---------- Tool: compare_accounts_chart ----------
+
+    def compare_accounts_chart(
+            self,
+            account1_last4: str,
+            account2_last4: str,
+            group_by: str = "category",
+            title: str = None,
+            start_date: str = None,
+            end_date: str = None,
+            expenses_only: bool = True
+    ) -> dict:
+        """Create a grouped bar chart comparing two accounts side-by-side."""
+        import numpy as np
+
+        if 'account_last4' not in self.df.columns:
+            return {"error": "No account data available. Please re-import statements."}
+
+        data = self.df.copy()
+
+        # Apply date filters
+        if start_date:
+            data = data[data['date'] >= start_date]
+        if end_date:
+            data = data[data['date'] <= end_date]
+
+        if expenses_only:
+            data = data[data['amount'] < 0]
+            data['amount'] = data['amount'].abs()
+
+        # Get data for each account
+        a1 = data[data['account_last4'] == account1_last4]
+        a2 = data[data['account_last4'] == account2_last4]
+
+        if a1.empty and a2.empty:
+            return {"error": f"No data found for accounts ending in {account1_last4} or {account2_last4}"}
+
+        # Group by category/merchant
+        if group_by == "category":
+            a1_grouped = a1.groupby('category')['amount'].sum().round(2)
+            a2_grouped = a2.groupby('category')['amount'].sum().round(2)
+        elif group_by == "merchant":
+            a1_grouped = a1.groupby('description')['amount'].sum().round(2)
+            a2_grouped = a2.groupby('description')['amount'].sum().round(2)
+        else:
+            return {"error": "group_by must be 'category' or 'merchant'"}
+
+        # Get all categories from both accounts
+        all_categories = sorted(set(a1_grouped.index) | set(a2_grouped.index))
+
+        # Fill missing categories with 0
+        a1_values = [a1_grouped.get(cat, 0) for cat in all_categories]
+        a2_values = [a2_grouped.get(cat, 0) for cat in all_categories]
+
+        # Labels for the accounts
+        label1 = f"****{account1_last4}"
+        label2 = f"****{account2_last4}"
+
+        # Create grouped bar chart
+        plt.figure(figsize=(12, 6))
+        plt.style.use('seaborn-v0_8-darkgrid')
+
+        x = np.arange(len(all_categories))
+        width = 0.35
+
+        bars1 = plt.bar(x - width / 2, a1_values, width, label=label1, color='#3498db')
+        bars2 = plt.bar(x + width / 2, a2_values, width, label=label2, color='#e74c3c')
+
+        plt.xlabel(group_by.title())
+        plt.ylabel('Amount ($)')
+
+        if not title:
+            title = f"Spending Comparison: {label1} vs {label2}"
+        plt.title(title, fontsize=14, fontweight='bold')
+
+        plt.xticks(x, all_categories, rotation=45, ha='right')
+        plt.legend()
+
+        # Add value labels
+        for bar in bars1:
+            height = bar.get_height()
+            if height > 0:
+                plt.annotate(f'${height:,.0f}',
+                             xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 3), textcoords="offset points",
+                             ha='center', va='bottom', fontsize=8, rotation=90)
+
+        for bar in bars2:
+            height = bar.get_height()
+            if height > 0:
+                plt.annotate(f'${height:,.0f}',
+                             xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 3), textcoords="offset points",
+                             ha='center', va='bottom', fontsize=8, rotation=90)
+
+        plt.tight_layout()
+
+        # Save chart
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"compare_accounts_{account1_last4}_{account2_last4}_{timestamp}.png"
+        filepath = CHARTS_DIR / filename
+        plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        return {
+            "chart_created": True,
+            "chart_path": str(filepath),
+            "chart_type": "grouped_bar",
+            "categories_compared": len(all_categories),
+            "account1_total": round(sum(a1_values), 2),
+            "account2_total": round(sum(a2_values), 2),
+            "account1": label1,
+            "account2": label2,
+            "_note": "Chart saved. DO NOT include the chart_path in your response - the UI displays it automatically."
+        }
+
     # ---------- Tool: analyze_and_chart ----------
 
     def analyze_and_chart(
@@ -817,7 +1083,10 @@ class FinanceTools:
             start_date: str = None,
             end_date: str = None,
             expenses_only: bool = True,
-            top_n: int = 10
+            top_n: int = 10,
+            account_last4: str = None,
+            card_type: str = None,
+            bank: str = None
     ) -> dict:
         """Return data breakdown AND create a chart in one call."""
         data = self.df.copy()
@@ -827,6 +1096,12 @@ class FinanceTools:
             data = data[data['date'] >= start_date]
         if end_date:
             data = data[data['date'] <= end_date]
+        if account_last4 and 'account_last4' in data.columns:
+            data = data[data['account_last4'] == account_last4]
+        if card_type and 'card_type' in data.columns:
+            data = data[data['card_type'].str.lower() == card_type.lower()]
+        if bank and 'bank' in data.columns:
+            data = data[data['bank'].str.lower() == bank.lower()]
         if expenses_only:
             data = data[data['amount'] < 0]
             data['amount'] = data['amount'].abs()
@@ -864,24 +1139,96 @@ class FinanceTools:
             date_range = f" (from {start_date})"
         elif end_date:
             date_range = f" (until {end_date})"
-        title = f"Spending by {group_by.title()}{date_range}"
+        account_label = f" - Account ****{account_last4}" if account_last4 else ""
+        title = f"Spending by {group_by.title()}{date_range}{account_label}"
 
         # Create chart
-        plt.figure(figsize=(10, 6))
         plt.style.use('seaborn-v0_8-darkgrid')
 
         if chart_type == "pie":
+            total = chart_data.sum()
+
+            # Use Plotly for interactive pie chart if available
+            if PLOTLY_AVAILABLE:
+                colors = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462',
+                          '#b3de69', '#fccde5', '#d9d9d9', '#bc80bd', '#ccebc5']
+
+                fig = go.Figure(data=[go.Pie(
+                    labels=chart_data.index.tolist(),
+                    values=chart_data.values.tolist(),
+                    hole=0.3,
+                    textinfo='none',
+                    hovertemplate='<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>',
+                    marker=dict(colors=colors[:len(chart_data)])
+                )])
+
+                fig.update_layout(
+                    title=dict(text=title, font=dict(size=18, color='#333')),
+                    showlegend=True,
+                    legend=dict(
+                        orientation="v",
+                        yanchor="middle",
+                        y=0.5,
+                        xanchor="left",
+                        x=1.02,
+                        font=dict(size=12)
+                    ),
+                    margin=dict(t=60, b=20, l=20, r=150),
+                    paper_bgcolor='white',
+                    plot_bgcolor='white'
+                )
+
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                json_filename = f"analyze_{chart_type}_{group_by}_{timestamp}.json"
+                json_filepath = CHARTS_DIR / json_filename
+                fig.write_json(str(json_filepath))
+
+                return {
+                    "breakdown": full_breakdown,
+                    "total": round(sum(full_breakdown.values()), 2),
+                    "count": len(full_breakdown),
+                    "chart_created": True,
+                    "chart_path": str(json_filepath),
+                    "chart_type": "plotly_pie",
+                    "interactive": True,
+                    "_note": "Interactive chart saved. DO NOT include the chart_path in your response."
+                }
+
+            # Fallback to matplotlib
+            fig, ax = plt.subplots(figsize=(12, 8))
             colors = plt.cm.Set3(range(len(chart_data)))
-            plt.pie(
+
+            wedges, texts = ax.pie(
                 chart_data.values,
-                labels=[f"{k}\n${v:,.0f}" for k, v in chart_data.items()],
-                autopct='%1.1f%%',
                 colors=colors,
                 startangle=90
             )
-            plt.title(title, fontsize=14, fontweight='bold')
 
-        elif chart_type == "bar":
+            legend_labels = [f"{k}: ${v:,.0f} ({v / total * 100:.1f}%)" for k, v in chart_data.items()]
+            ax.legend(wedges, legend_labels, title="Categories", loc="center left",
+                      bbox_to_anchor=(1, 0, 0.5, 1), fontsize=10)
+
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"analyze_{chart_type}_{group_by}_{timestamp}.png"
+            filepath = CHARTS_DIR / filename
+            fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+
+            return {
+                "breakdown": full_breakdown,
+                "total": round(sum(full_breakdown.values()), 2),
+                "count": len(full_breakdown),
+                "chart_created": True,
+                "chart_path": str(filepath),
+                "interactive": False,
+                "_note": "Chart saved. DO NOT include the chart_path in your response."
+            }
+
+        plt.figure(figsize=(10, 6))
+
+        if chart_type == "bar":
             if group_by == "month":
                 chart_data = chart_data.sort_index()
 

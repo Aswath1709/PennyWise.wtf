@@ -63,15 +63,30 @@ CRITICAL CHART RULES:
    Examples: "list months and show graph", "show categories with a pie chart"
 
 9. When user wants ONLY a chart (no text data) → use create_chart
+   - Can filter by account_last4, card_type, bank
+   - For MULTIPLE accounts, call create_chart MULTIPLE TIMES with different account_last4 values
+   Examples: "pie chart for each account" → call create_chart twice with different account_last4
 
 10. When comparing TWO specific periods with a chart → use compare_periods_chart
 
-11. When user wants ONLY text data (no chart) → use aggregate
+11. When comparing TWO specific accounts with a chart → use compare_accounts_chart
+    Examples: "compare spending between account 1234 and 5678", "compare accounts by category"
 
-IMPORTANT:
-- analyze_and_chart returns BOTH the data breakdown AND creates a chart
-- You DO NOT need to call two separate tools when user wants both
-- DO NOT include file paths in your response - the UI displays charts automatically
+12. When user wants ONLY text data (no chart) → use aggregate
+
+13. For "pie chart for all accounts" or "separate charts for each account":
+    - First call get_data_summary to see which accounts exist
+    - Then call create_chart once per account with account_last4 filter
+
+RESPONSE FORMATTING - EXTREMELY IMPORTANT:
+- NEVER include file paths, chart paths, or any paths in your response
+- NEVER mention "/home/", "/charts/", ".png", or any file locations
+- NEVER use <chart path="..."> or similar tags
+- The UI automatically displays charts - just say "Here is a pie chart showing..." WITHOUT any path
+- If a tool returns a chart_path, DO NOT include it in your response text
+
+GOOD RESPONSE: "Here is a pie chart showing your spending breakdown by category."
+BAD RESPONSE: "Here is a pie chart <chart path='/home/user/charts/pie.png'>"
 
 When user asks about spending, use expenses_only=true.
 When user asks about income, use income_only=true."""
@@ -97,12 +112,14 @@ class FinanceAgent:
         # Start chat session - this persists across messages
         self.chat = self.model.start_chat()
         self.verbose = False
-        self.last_chart_path = None  # Track last created chart
+        self.last_chart_path = None  # Track last created chart (for single chart)
+        self.chart_paths = []  # Track all charts created in a response
 
     def reset(self):
         """Start a new conversation (clear history)."""
         self.chat = self.model.start_chat()
         self.last_chart_path = None
+        self.chart_paths = []
         print("Conversation reset.")
 
     def ask(self, user_query: str) -> str:
@@ -111,53 +128,62 @@ class FinanceAgent:
         Remembers previous conversation context.
         """
         self.last_chart_path = None  # Reset chart path
+        self.chart_paths = []  # Reset all chart paths
         response = self.chat.send_message(user_query)
 
         # Loop until no more function calls
         while True:
-            function_call = None
+            function_calls = []
 
             try:
+                # Collect ALL function calls in this response (parallel function calling)
                 for part in response.candidates[0].content.parts:
                     if hasattr(part, 'function_call') and part.function_call.name:
-                        function_call = part.function_call
-                        break
+                        function_calls.append(part.function_call)
             except (AttributeError, IndexError):
                 return response.text
 
-            if not function_call:
+            if not function_calls:
                 return response.text
 
-            # Execute function call
-            tool_name = function_call.name
-            tool_params = {k: v for k, v in function_call.args.items()}
+            # Execute ALL function calls and collect responses
+            function_responses = []
 
-            if self.verbose:
-                print(f"\n[Agent] Calling tool: {tool_name}")
-                print(f"[Agent] Params: {json.dumps(tool_params, indent=2, default=str)}")
+            for function_call in function_calls:
+                tool_name = function_call.name
+                tool_params = {k: v for k, v in function_call.args.items()}
 
-            # Execute tool
-            result = self.finance_tools.execute(tool_name, tool_params)
+                if self.verbose:
+                    print(f"\n[Agent] Calling tool: {tool_name}")
+                    print(f"[Agent] Params: {json.dumps(tool_params, indent=2, default=str)}")
 
-            # Track if chart was created
-            if tool_name in ["create_chart", "compare_periods_chart", "analyze_and_chart"] and result.get(
-                    "chart_created"):
-                self.last_chart_path = result.get("chart_path")
+                # Execute tool
+                result = self.finance_tools.execute(tool_name, tool_params)
 
-            if self.verbose:
-                result_str = json.dumps(result, indent=2, default=str)
-                print(f"[Agent] Result: {result_str[:500]}...")
+                # Track if chart was created
+                if tool_name in ["create_chart", "compare_periods_chart", "compare_accounts_chart",
+                                 "analyze_and_chart"] and result.get("chart_created"):
+                    chart_path = result.get("chart_path")
+                    self.last_chart_path = chart_path
+                    self.chart_paths.append(chart_path)
 
-            # Send function response back
-            response = self.chat.send_message(
-                genai.protos.Content(
-                    parts=[genai.protos.Part(
+                if self.verbose:
+                    result_str = json.dumps(result, indent=2, default=str)
+                    print(f"[Agent] Result: {result_str[:500]}...")
+
+                # Add to function responses
+                function_responses.append(
+                    genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
                             name=tool_name,
                             response={"result": result}
                         )
-                    )]
+                    )
                 )
+
+            # Send ALL function responses back at once
+            response = self.chat.send_message(
+                genai.protos.Content(parts=function_responses)
             )
 
 

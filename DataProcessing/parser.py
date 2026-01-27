@@ -6,6 +6,8 @@ Chase Statement Parser
 Supports:
 - Chase Checking/Debit statements
 - Chase Credit Card statements (Sapphire, Freedom, etc.)
+
+Returns: (DataFrame, account_last4)
 """
 
 import re
@@ -15,7 +17,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def parse_single_statement(pdf_path: str | Path, statement_type: str = "credit") -> pd.DataFrame:
+def parse_single_statement(pdf_path: str | Path, statement_type: str = "credit") -> tuple[pd.DataFrame, str]:
     """
     Parse a Chase statement PDF.
 
@@ -24,7 +26,7 @@ def parse_single_statement(pdf_path: str | Path, statement_type: str = "credit")
         statement_type: "credit" or "debit"
 
     Returns:
-        DataFrame with columns: date, description, amount
+        Tuple of (DataFrame with columns: Date, Description, Amount, account_last4 string)
     """
     pdf_path = Path(pdf_path)
 
@@ -37,8 +39,33 @@ def parse_single_statement(pdf_path: str | Path, statement_type: str = "credit")
         return parse_debit(pdf_path)
 
 
-def parse_credit(pdf_path: str | Path) -> pd.DataFrame:
-    """Parse Chase credit card statement."""
+def extract_account_last4(text: str) -> str:
+    """Extract last 4 digits of account number from statement text."""
+
+    # Common patterns for account numbers
+    patterns = [
+        # "Account Number: XXXX XXXX XXXX 1234" or "...ending in 1234"
+        r'(?:account|acct|card)[\s#:]*(?:number)?[\s:]*[\dxX*\s-]*(\d{4})\b',
+        # "XXXXXXXXXXXX1234"
+        r'[xX*]{8,}(\d{4})\b',
+        # "Account ending in 1234"
+        r'ending\s+in\s+(\d{4})',
+        # "Last 4: 1234"
+        r'last\s*4[\s:]+(\d{4})',
+        # Just look for pattern like "...1234" after account-like text
+        r'account[^\d]*(\d{4})\s',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def parse_credit(pdf_path: str | Path) -> tuple[pd.DataFrame, str]:
+    """Parse Chase credit card statement. Returns (DataFrame, account_last4)."""
 
     # Extract text from all pages
     full_text = ""
@@ -47,6 +74,9 @@ def parse_credit(pdf_path: str | Path) -> pd.DataFrame:
             text = page.extract_text()
             if text:
                 full_text += text + "\n"
+
+    # Extract account last 4
+    account_last4 = extract_account_last4(full_text)
 
     # Get statement year/month from "Statement Date: MM/DD/YY"
     match = re.search(r'Statement\s*Date[:\s]+(\d{1,2})/(\d{1,2})/(\d{2,4})', full_text, re.IGNORECASE)
@@ -93,11 +123,11 @@ def parse_credit(pdf_path: str | Path) -> pd.DataFrame:
     df = pd.DataFrame(transactions)
     if not df.empty:
         df = df.sort_values('Date').reset_index(drop=True)
-    return df
+    return df, account_last4
 
 
-def parse_debit(pdf_path: str | Path) -> pd.DataFrame:
-    """Parse Chase checking/debit statement."""
+def parse_debit(pdf_path: str | Path) -> tuple[pd.DataFrame, str]:
+    """Parse Chase checking/debit statement. Returns (DataFrame, account_last4)."""
 
     # Extract text from all pages
     full_text = ""
@@ -106,6 +136,9 @@ def parse_debit(pdf_path: str | Path) -> pd.DataFrame:
             text = page.extract_text()
             if text:
                 full_text += text + "\n"
+
+    # Extract account last 4
+    account_last4 = extract_account_last4(full_text)
 
     # Get statement date
     match = re.search(r'through\s+(\d{1,2})/(\d{1,2})/(\d{2,4})', full_text, re.IGNORECASE)
@@ -156,7 +189,7 @@ def parse_debit(pdf_path: str | Path) -> pd.DataFrame:
     df = pd.DataFrame(transactions)
     if not df.empty:
         df = df.sort_values('Date').reset_index(drop=True)
-    return df
+    return df, account_last4
 
 
 # ========== TEST ==========
@@ -171,7 +204,10 @@ if __name__ == "__main__":
         print(f"Parsing: {pdf_path} (type: {stmt_type})")
         print("-" * 60)
 
-        df = parse_single_statement(pdf_path, stmt_type)
+        df, account_last4 = parse_single_statement(pdf_path, stmt_type)
+
+        print(f"Account ending in: {account_last4 or 'Not found'}")
+        print()
 
         if df.empty:
             print("No transactions found!")

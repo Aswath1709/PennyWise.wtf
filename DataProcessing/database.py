@@ -44,6 +44,8 @@ def init_db():
                      TEXT,
                      bank
                      TEXT,
+                     account_last4
+                     TEXT,
                      txn_hash
                      TEXT
                      UNIQUE,
@@ -79,7 +81,7 @@ def init_db():
                  )
                  """)
 
-    # Migration: Add card_type and bank columns if they don't exist
+    # Migration: Add new columns if they don't exist
     _migrate_add_columns(conn)
 
     conn.commit()
@@ -96,6 +98,9 @@ def _migrate_add_columns(conn):
 
     if 'bank' not in columns:
         conn.execute("ALTER TABLE transactions ADD COLUMN bank TEXT")
+
+    if 'account_last4' not in columns:
+        conn.execute("ALTER TABLE transactions ADD COLUMN account_last4 TEXT")
 
 
 # ========== HELPER FUNCTIONS ==========
@@ -131,7 +136,8 @@ def get_imported_files() -> pd.DataFrame:
 
 # ========== SAVE ==========
 
-def save_transactions(df: pd.DataFrame, source_file: str = None, card_type: str = None, bank: str = None) -> dict:
+def save_transactions(df: pd.DataFrame, source_file: str = None, card_type: str = None, bank: str = None,
+                      account_last4: str = None) -> dict:
     """
     Save transactions to database, skipping duplicates.
 
@@ -140,6 +146,7 @@ def save_transactions(df: pd.DataFrame, source_file: str = None, card_type: str 
         source_file: Optional filename for tracking
         card_type: "credit" or "debit"
         bank: Bank name (e.g., "Chase")
+        account_last4: Last 4 digits of account number
 
     Returns:
         Dict with saved_count, skipped_count, already_imported
@@ -169,10 +176,10 @@ def save_transactions(df: pd.DataFrame, source_file: str = None, card_type: str 
 
         try:
             conn.execute(
-                """INSERT INTO transactions (date, description, amount, category, card_type, bank, txn_hash,
-                                             source_file)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (date, description, amount, category, card_type, bank, txn_hash, source_file)
+                """INSERT INTO transactions (date, description, amount, category, card_type, bank, account_last4,
+                                             txn_hash, source_file)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (date, description, amount, category, card_type, bank, account_last4, txn_hash, source_file)
             )
             saved_count += 1
         except sqlite3.IntegrityError:
